@@ -8,6 +8,7 @@ from threading import Thread
 
 import docker
 from telegram import Update, Bot
+from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
 # Load environment variables
@@ -72,6 +73,22 @@ async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=chat_id, text="Messages disabled.")
 
 
+async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Received /restart_server command.")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Restarting...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    container = client.containers.get(container_name)
+    try:
+        container.restart()
+        await asyncio.sleep(10)
+    except docker.errors.NotFound as error:
+        logging.error(f"Can't restart server '{error}'.")
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text=f"Error during server restart: {error}")
+
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Server restarted. Status {container.status}")
+
+
 # === CONTINUOUS LOG FILE MONITORING === #
 def monitor_logs() -> None:
     logging.info("Starting log monitoring...")
@@ -115,6 +132,7 @@ if __name__ == '__main__':
     print(type(chat_list[0]))
     application = ApplicationBuilder().token(bot_token).build()
     application.add_handler(CommandHandler('start', start, filters=filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('restart_server', restart_server, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))

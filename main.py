@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import multiprocessing
 import os
 import sqlite3
 import time
@@ -14,6 +15,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 # Load environment variables
 bot_token = os.environ['APIKEY']
 container_name = os.environ['CONTAINER_NAME']
+
 chat_list = json.loads(os.environ['CHAT_LIST'])
 
 # Ensure the database folder exists
@@ -34,6 +36,7 @@ delete_chat = "DELETE FROM chat_settings WHERE chat_id = ?;"
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+monitor_thread = None
 
 async def restrict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"User {update.effective_user.id} from chat {update.effective_chat.id} sends {update.message.text}")
@@ -87,6 +90,9 @@ async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        text=f"Error during server restart: {error}")
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Server restarted. Status {container.status}")
+    stop_monitor_process()
+    start_monitor_process()
+
 
 
 # === CONTINUOUS LOG FILE MONITORING === #
@@ -124,6 +130,13 @@ def send_message(message, is_chat=False):
             return
         asyncio.run(bot.send_message(chat_id=chat[0], text=message))
 
+def start_monitor_process():
+    global monitor_thread
+    monitor_thread = multiprocessing.Process(target=monitor_logs, daemon=True)
+    monitor_thread.start()
+
+def stop_monitor_process():
+    monitor_thread.terminate()
 
 if __name__ == '__main__':
     logging.info("Starting Telegram bot...")
@@ -139,7 +152,6 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(None, callback=restrict))
 
     # Start log monitoring in a separate thread
-    thread1 = Thread(target=monitor_logs, daemon=True)
-    thread1.start()
+    start_monitor_process()
     # Run bot polling in the main thread
     application.run_polling()

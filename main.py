@@ -88,7 +88,7 @@ def monitor_logs() -> None:
                 logging.info(f"Send message: {message_text}")
                 chats = settings_cur.execute(get_chats).fetchall()
                 for chat in chats:
-                     bot.send_message(chat_id=chat[0], text=message_text)
+                   asyncio.run(bot.send_message(chat_id=chat[0], text=message_text))
 
     except docker.errors.NotFound:
         logging.error(f"Container '{container_name}' not found.")

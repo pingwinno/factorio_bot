@@ -85,22 +85,27 @@ def monitor_logs() -> None:
 
             message_text = ""
             if "[JOIN]" in line:
-                message_text = line.split("[JOIN]")[1].strip()
+                send_message(line.split("[JOIN]")[1].strip())
             elif "[LEAVE]" in line:
-                message_text = line.split("[LEAVE]")[1].strip()
-
-            if message_text:
-                logging.info(f"Send message: {message_text}")
-                chats = settings_cur.execute(get_chats).fetchall()
-                for chat in chats:
-                    bot = Bot(token=bot_token)
-                    logging.info(f"Sending message to chat: {chat}")
-                    asyncio.run(bot.send_message(chat_id=chat[0], text=message_text))
+                send_message(line.split("[LEAVE]")[1].strip())
+            elif "[CHAT]" in line:
+                send_message(line, True)
 
     except docker.errors.NotFound:
         logging.error(f"Container '{container_name}' not found.")
     except Exception as e:
         logging.error(f"Error in log monitoring: {e}")
+
+
+def send_message(message, is_chat=False):
+    logging.info(f"Send message: {message}")
+    chats = settings_cur.execute(get_chats).fetchall()
+    for chat in chats:
+        bot = Bot(token=bot_token)
+        logging.info(f"Sending message to chat: {chat}")
+        if is_chat and chat[1] == 0:
+            return
+        asyncio.run(bot.send_message(chat_id=chat[0], text=message))
 
 
 if __name__ == '__main__':
@@ -109,9 +114,9 @@ if __name__ == '__main__':
     print(chat_list)
     print(type(chat_list[0]))
     application = ApplicationBuilder().token(bot_token).build()
-    application.add_handler(CommandHandler('start', start, filters= filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('enable_messages', enable_messages, filters= filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('disable_messages', disable_messages, filters= filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('start', start, filters=filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))
     application.add_handler(MessageHandler(None, callback=restrict))
 

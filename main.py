@@ -2,17 +2,20 @@ import asyncio
 import logging
 import os
 import sqlite3
+import time
 
+import docker
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
 # Load environment variables
 bot_token = os.environ['APIKEY']
-log_name = os.environ['LOG_NAME']
+container_name = os.environ.get('CONTAINER_NAME')
 
 # Ensure the database folder exists
 if not os.path.exists("db"):
     os.mkdir("db")
+client = docker.from_env()
 
 # Setup SQLite database
 settings_con = sqlite3.connect("db/settings.db", check_same_thread=False)
@@ -59,30 +62,32 @@ async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === CONTINUOUS LOG FILE MONITORING === #
-async def send_message():
+async def monitor_logs():
     bot = Bot(token=bot_token)
+    try:
+        container = client.containers.get(container_name)
 
-    with open(log_name, "r") as logfile:
-        logfile.seek(0, 2)  # Move to the end of the file
+        # Fetch logs since script start time (only new logs)
+        logs=   container.logs(stream=True, follow=True, since=int(time.time()))
 
-        while True:
-            line = logfile.readline()
-            if not line:
-                await asyncio.sleep(0.1)  # Non-blocking sleep
-                continue  # Continue looping if no new line is found
+        for log in logs:  # Standard for-loop since logs is NOT async
+            message_text = log.decode("utf-8").strip()
+            logging.info(f"Log line: {message_text}")
 
-            message_text = ""
-            logging.info(f"Check line: {line.strip()}")
-
-            if "[JOIN]" in line:
-                message_text = line.split("[JOIN]")[1].strip()
-            elif "[LEAVE]" in line:
-                message_text = line.split("[LEAVE]")[1].strip()
+            if "[JOIN]" in message_text:
+                message_text = message_text.split("[JOIN]")[1].strip()
+            elif "[LEAVE]" in message_text:
+                message_text = message_text.split("[LEAVE]")[1].strip()
 
             if message_text:
                 chats = settings_cur.execute(get_chats).fetchall()
                 for chat in chats:
                     await bot.send_message(chat_id=chat[0], text=message_text)
+
+    except docker.errors.NotFound:
+        logging.error(f"Container '{container_name}' not found.")
+    except Exception as e:
+        logging.error(f"Error: {e}")
 
 
 # === MAIN FUNCTION === #

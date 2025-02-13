@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 import time
 from threading import Thread
@@ -78,9 +79,9 @@ def monitor_logs() -> None:
             logging.info(f"Log line: {line}")
 
             message_text = ""
-            if "[JOIN]" in line:
+            if re.search(r"[JOIN]", line):
                 message_text = line.split("[JOIN]")[1].strip()
-            elif "[LEAVE]" in line:
+            elif re.search(r"[LEAVE]", line):
                 message_text = line.split("[LEAVE]")[1].strip()
 
             if message_text:
@@ -107,7 +108,6 @@ if __name__ == '__main__':
     # Start log monitoring in a separate thread
     thread1 = Thread(target=monitor_logs, daemon=True)
     thread1.start()
-
     # Run bot polling in the main thread
     application.run_polling()
 

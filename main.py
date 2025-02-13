@@ -90,10 +90,10 @@ def monitor_logs() -> None:
                 message_text = line.split("[LEAVE]")[1].strip()
 
             if message_text:
-                bot = Bot(token=bot_token)
                 logging.info(f"Send message: {message_text}")
                 chats = settings_cur.execute(get_chats).fetchall()
                 for chat in chats:
+                    bot = Bot(token=bot_token)
                     logging.info(f"Sending message to chat: {chat}")
                     asyncio.run(bot.send_message(chat_id=chat[0], text=message_text))
 

@@ -104,7 +104,7 @@ async def main():
         await application.updater.start_polling()
 
         # Start log monitoring in parallel
-        log_task = asyncio.create_task(send_message())
+        log_task = asyncio.create_task(monitor_logs())
 
         try:
             # Keep the event loop running

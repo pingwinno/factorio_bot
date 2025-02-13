@@ -79,9 +79,9 @@ def monitor_logs() -> None:
             logging.info(f"Log line: {line}")
 
             message_text = ""
-            if re.search(r"JOIN", line):
+            if re.match(r"JOIN", line):
                 message_text = line.split("[JOIN]")[1].strip()
-            elif re.search(r"LEAVE", line):
+            elif re.match(r"LEAVE", line):
                 message_text = line.split("[LEAVE]")[1].strip()
 
             if message_text:

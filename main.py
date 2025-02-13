@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import time
+from threading import Thread
 
 import docker
 from telegram import Update, Bot
@@ -30,17 +31,17 @@ delete_chat = "DELETE FROM chat_settings WHERE chat_id = ?;"
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-
 # === TELEGRAM COMMAND HANDLERS === #
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Received /start command.")
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, False])
     settings_con.commit()
-    await context.bot.send_message(chat_id=chat_id,
-                                   text="Chat added. Type /enable_messages to receive Factorio messages.")
+    await context.bot.send_message(chat_id=chat_id, text="Chat added. Type /enable_messages to receive Factorio messages.")
 
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Received /stop command.")
     chat_id = update.message.chat_id
     settings_cur.execute(delete_chat, [chat_id])
     settings_con.commit()
@@ -48,6 +49,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Received /enable_messages command.")
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, True])
     settings_con.commit()
@@ -55,6 +57,7 @@ async def enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Received /disable_messages command.")
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, False])
     settings_con.commit()
@@ -62,36 +65,38 @@ async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === CONTINUOUS LOG FILE MONITORING === #
-async def monitor_logs():
+def monitor_logs() -> None:
+    logging.info("Starting log monitoring...")
     bot = Bot(token=bot_token)
     try:
         container = client.containers.get(container_name)
 
-        # Fetch logs since script start time (only new logs)
-        logs=   container.logs(stream=True, follow=True, since=int(time.time()))
+        logs = container.logs(stream=True, follow=True, since=int(time.time()))
 
-        for log in logs:  # Standard for-loop since logs is NOT async
-            message_text = log.decode("utf-8").strip()
-            logging.info(f"Log line: {message_text}")
+        for log in logs:
+            line = log.decode("utf-8").strip()
+            logging.info(f"Log line: {line}")
 
-            if "[JOIN]" in message_text:
-                message_text = message_text.split("[JOIN]")[1].strip()
-            elif "[LEAVE]" in message_text:
-                message_text = message_text.split("[LEAVE]")[1].strip()
+            message_text = ""
+            if "[JOIN]" in line:
+                message_text = line.split("[JOIN]")[1].strip()
+            elif "[LEAVE]" in line:
+                message_text = line.split("[LEAVE]")[1].strip()
 
             if message_text:
                 chats = settings_cur.execute(get_chats).fetchall()
                 for chat in chats:
-                    await bot.send_message(chat_id=chat[0], text=message_text)
+                     bot.send_message(chat_id=chat[0], text=message_text)
 
     except docker.errors.NotFound:
         logging.error(f"Container '{container_name}' not found.")
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error in log monitoring: {e}")
 
 
-# === MAIN FUNCTION === #
-async def main():
+if __name__ == '__main__':
+    logging.info("Starting Telegram bot...")
+
     application = ApplicationBuilder().token(bot_token).build()
 
     application.add_handler(CommandHandler('start', start))
@@ -99,26 +104,10 @@ async def main():
     application.add_handler(CommandHandler('disable_messages', disable_messages))
     application.add_handler(CommandHandler('stop', stop))
 
-    async with application:
-        await application.start()
-        await application.updater.start_polling()
+    # Start log monitoring in a separate thread
+    thread1 = Thread(target=monitor_logs, daemon=True)
+    thread1.start()
 
-        # Start log monitoring in parallel
-        log_task = asyncio.create_task(monitor_logs())
+    # Run bot polling in the main thread
+    application.run_polling()
 
-        try:
-            # Keep the event loop running
-            while True:
-                await asyncio.sleep(0.1)
-        except KeyboardInterrupt:
-            logging.info("Shutting down bot...")
-
-        # Stop everything gracefully
-        log_task.cancel()
-        await application.updater.stop()
-        await application.stop()
-
-
-# === RUNNING THE BOT === #
-if __name__ == "__main__":
-    asyncio.run(main())  # Ensures a clean event loop

@@ -79,12 +79,13 @@ def monitor_logs() -> None:
             logging.info(f"Log line: {line}")
 
             message_text = ""
-            if re.match(r"JOIN", line):
+            if "[JOIN]" in line:
                 message_text = line.split("[JOIN]")[1].strip()
-            elif re.match(r"LEAVE", line):
+            elif "[LEAVE]" in line:
                 message_text = line.split("[LEAVE]")[1].strip()
 
             if message_text:
+                logging.info(f"Send message: {message_text}")
                 chats = settings_cur.execute(get_chats).fetchall()
                 for chat in chats:
                      bot.send_message(chat_id=chat[0], text=message_text)

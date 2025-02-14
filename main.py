@@ -5,9 +5,9 @@ import multiprocessing
 import os
 import sqlite3
 import time
-from rcon.source import Client
 
 import docker
+from rcon.source import Client
 from telegram import Update, Bot
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
@@ -46,6 +46,7 @@ get_user = "SELECT username, color FROM user_settings WHERE user_id = ?;"
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 monitor_thread = None
+
 
 async def restrict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"User {update.effective_user.id} from chat {update.effective_chat.id} sends {update.message.text}")
@@ -98,17 +99,20 @@ async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
                                              text=f"Error during server restart: {error}")
 
-    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id, text=f"Server restarted. Status {container.status}")
+    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
+                                         text=f"Server restarted. Status {container.status}")
     stop_monitor_process()
     start_monitor_process()
+
 
 async def forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
     user_id = update.message.from_user.id
     user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
-    user_name = user_metadata[0]
-    color = user_metadata[1]
+    user_name = user_metadata[0] if user_metadata else update.message.from_user.username
+    color = user_metadata[1] if user_metadata else "#FFFFFF"
     send_message_to_factorio(f"{user_name}: {message}", color)
+
 
 async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -117,6 +121,7 @@ async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     color = data[2]
     user_cur.execute(add_user, [user_id, user_name, color])
     user_con.commit()
+
 
 def monitor_logs() -> None:
     logging.info("Starting log monitoring...")
@@ -151,19 +156,23 @@ def send_message_to_tg(message, is_chat=False):
             return
         asyncio.run(bot.send_message(chat_id=chat[0], text=message))
 
+
 def send_message_to_factorio(message, color=None):
     logging.info(f"Send message to Factorio: {message}")
 
     with Client(rcon_server, rcon_port, passwd=rcon_pwd) as client:
         client.run(f"[color={color}]{message}[/color]")
 
+
 def start_monitor_process():
     global monitor_thread
     monitor_thread = multiprocessing.Process(target=monitor_logs, daemon=True)
     monitor_thread.start()
 
+
 def stop_monitor_process():
     monitor_thread.terminate()
+
 
 if __name__ == '__main__':
     logging.info("Starting Telegram bot...")
@@ -177,7 +186,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))
-    application.add_handler(MessageHandler(filters=filters.Chat(chat_list), callback=forward))
+    application.add_handler(MessageHandler(filters=(filters.Chat(chat_list) & filters.TEXT), callback=forward))
     application.add_handler(MessageHandler(None, callback=restrict))
 
     # Start log monitoring in a separate thread

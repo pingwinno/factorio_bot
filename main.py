@@ -194,6 +194,7 @@ def start_monitor_process():
 def stop_monitor_process():
     monitor_thread.terminate()
 
+
 def get_message_type(message):
     if message.photo:
         return "[IMAGE]"
@@ -213,6 +214,9 @@ def get_message_type(message):
         return "[LOCATION]"
     if message.poll:
         return "[POOL]"
+    else:
+        return ""
+
 
 def format_tg_message(log_text):
     match = re.search(r"\[CHAT\] (.*?): (.*)", log_text)
@@ -226,6 +230,7 @@ def format_tg_message(log_text):
         logging.info("Message:", message)
         return f"<b>👲[{username}]</b>: {message}"
     return log_text
+
 
 if __name__ == '__main__':
     logging.info("Starting Telegram bot...")

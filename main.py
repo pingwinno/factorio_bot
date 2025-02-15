@@ -224,7 +224,7 @@ def format_tg_message(log_text):
                 message = message.replace(code, code_to_emoji[code])
         logging.info("Username:", username)
         logging.info("Message:", message)
-        return f"<b>{username}</b>: {message}"
+        return f"<b>👲[{username}]</b>: {message}"
     return log_text
 
 if __name__ == '__main__':

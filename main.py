@@ -3,6 +3,7 @@ import json
 import logging
 import multiprocessing
 import os
+import re
 import sqlite3
 import time
 
@@ -11,6 +12,16 @@ from rcon.source import Client
 from telegram import Update, Bot
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+
+code_to_emoji = {
+    "[entity=tile-ghost]": "👻",  # Ghost (Tile)
+    "[entity=entity-ghost]": "👻",  # Ghost (Entity)
+    "[entity=behemoth-biter]": "🪲",  # Behemoth Biter (Closest match: T-Rex)
+    "[virtual-signal=signal-skull]": "💀",  # Skull
+    "[virtual-signal=signal-ghost]": "👻",  # Ghost
+    "[virtual-signal=signal-check]": "✅",  # Check mark
+    "[virtual-signal=signal-deny]": "❌"  # Cross mark
+}
 
 # Load environment variables
 bot_token = os.environ['APIKEY']
@@ -107,6 +118,10 @@ async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text
+    if message:
+        message = f"{get_message_type(update.message)} {message}"
+    else:
+        message = get_message_type(update.message)
     user_id = update.message.from_user.id
     user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
     user_name = user_metadata[0] if user_metadata else update.message.from_user.username
@@ -121,6 +136,11 @@ async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     color = data[2]
     user_cur.execute(add_user, [user_id, user_name, color])
     user_con.commit()
+    user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
+    user_name = user_metadata[0] if user_metadata else update.message.from_user.username
+    color = user_metadata[1] if user_metadata else "#FFFFFF"
+    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
+                                         text=f"Username is set to '{user_name}'.\n Color is set to '{color}'.")
 
 
 def monitor_logs() -> None:
@@ -154,7 +174,7 @@ def send_message_to_tg(message, is_chat=False):
         logging.info(f"Sending message to chat: {chat}")
         if is_chat and chat[1] == 0:
             return
-        asyncio.run(bot.send_message(chat_id=chat[0], text=message))
+        asyncio.run(bot.send_message(chat_id=chat[0], text=message, parse_mode="HTML"))
 
 
 def send_message_to_factorio(message, color=None):
@@ -173,6 +193,38 @@ def start_monitor_process():
 def stop_monitor_process():
     monitor_thread.terminate()
 
+def get_message_type(message):
+    if message.photo:
+        return "[IMAGE]"
+    if message.video:
+        return "[VIDEO]"
+    if message.document:
+        return "[FILE]"
+    if message.sticker:
+        return "[STICKER]"
+    if message.voice:
+        return "[VOICE]"
+    if message.audio:
+        return "[AUDIO]"
+    if message.contact:
+        return "[CONTACT]"
+    if message.location:
+        return "[LOCATION]"
+    if message.poll:
+        return "[POOL]"
+
+def format_tg_message(log_text):
+    match = re.search(r"\[CHAT\] (.*?): (.*)", log_text)
+    if match:
+        username = match.group(1)  # Extracts 'unknown.device'
+        message = match.group(2)  # Extracts the actual message
+        for code in code_to_emoji.keys():
+            if code in message:
+                message.replace(code, code_to_emoji[code])
+        print("Username:", username)
+        print("Message:", message)
+        return f"<b>{username}</b>: {message}"
+    return log_text
 
 if __name__ == '__main__':
     logging.info("Starting Telegram bot...")
@@ -186,7 +238,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))
-    application.add_handler(MessageHandler(filters=(filters.Chat(chat_list) & filters.TEXT), callback=forward))
+    application.add_handler(MessageHandler(filters=filters.Chat(chat_list), callback=forward))
     application.add_handler(MessageHandler(None, callback=restrict))
 
     # Start log monitoring in a separate thread

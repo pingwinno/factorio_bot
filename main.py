@@ -168,6 +168,7 @@ def monitor_logs() -> None:
 
 def send_message_to_tg(message, is_chat=False):
     logging.info(f"Send message to TG: {message}")
+    message = format_tg_message(message)
     chats = settings_cur.execute(get_chats).fetchall()
     for chat in chats:
         bot = Bot(token=bot_token)
@@ -221,8 +222,8 @@ def format_tg_message(log_text):
         for code in code_to_emoji.keys():
             if code in message:
                 message.replace(code, code_to_emoji[code])
-        print("Username:", username)
-        print("Message:", message)
+        logging.info("Username:", username)
+        logging.info("Message:", message)
         return f"<b>{username}</b>: {message}"
     return log_text
 

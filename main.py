@@ -221,7 +221,7 @@ def format_tg_message(log_text):
         message = match.group(2)  # Extracts the actual message
         for code in code_to_emoji.keys():
             if code in message:
-                message.replace(code, code_to_emoji[code])
+                message = message.replace(code, code_to_emoji[code])
         logging.info("Username:", username)
         logging.info("Message:", message)
         return f"<b>{username}</b>: {message}"

@@ -69,7 +69,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, False])
     settings_con.commit()
-    await context.bot.send_message_to_tg(chat_id=chat_id,
+    await context.bot.send_message(chat_id=chat_id,
                                          text="Chat added. Type /enable_messages to receive Factorio messages.")
 
 
@@ -78,7 +78,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     settings_cur.execute(delete_chat, [chat_id])
     settings_con.commit()
-    await context.bot.send_message_to_tg(chat_id=chat_id, text="Chat deleted.")
+    await context.bot.send_message(chat_id=chat_id, text="Chat deleted.")
 
 
 async def enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,7 +86,7 @@ async def enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, True])
     settings_con.commit()
-    await context.bot.send_message_to_tg(chat_id=chat_id, text="Messages enabled.")
+    await context.bot.send_message(chat_id=chat_id, text="Messages enabled.")
 
 
 async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,12 +94,25 @@ async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     settings_cur.execute(add_chat, [chat_id, False])
     settings_con.commit()
-    await context.bot.send_message_to_tg(chat_id=chat_id, text="Messages disabled.")
+    await context.bot.send_message(chat_id=chat_id, text="Messages disabled.")
+
+async def enable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Autopause enabled.")
+    chat_id = update.message.chat_id
+    logging.info(set_autopause("true"))
+    await context.bot.send_message(chat_id=chat_id, text="Autopause enabled.")
+
+
+async def disable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Autopause disabled.")
+    chat_id = update.message.chat_id
+    logging.info(set_autopause("false"))
+    await context.bot.send_message(chat_id=chat_id, text="Autopause disabled.")
 
 
 async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Received /restart_server command.")
-    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id, text=f"Restarting...")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Restarting...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     container = client.containers.get(container_name)
     try:
@@ -107,10 +120,10 @@ async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(10)
     except docker.errors.NotFound as error:
         logging.error(f"Can't restart server '{error}'.")
-        await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
+        await context.bot.send_message(chat_id=update.effective_chat.id,
                                              text=f"Error during server restart: {error}")
 
-    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
+    await context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f"Server restarted. Status {container.status}")
     stop_monitor_process()
     start_monitor_process()
@@ -139,7 +152,7 @@ async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
     user_name = user_metadata[0] if user_metadata else update.message.from_user.username
     color = user_metadata[1] if user_metadata else "#FFFFFF"
-    await context.bot.send_message_to_tg(chat_id=update.effective_chat.id,
+    await context.bot.send_messageq(chat_id=update.effective_chat.id,
                                          text=f"Username is set to '{user_name}'.\n Color is set to '{color}'.")
 
 
@@ -183,6 +196,12 @@ def send_message_to_factorio(message, color=None):
 
     with Client(rcon_server, rcon_port, passwd=rcon_pwd) as client:
         client.run(f"[color={color}]{message}[/color]")
+
+def set_autopause(state):
+    logging.info(f"Set autopause: {state}")
+
+    with Client(rcon_server, rcon_port, passwd=rcon_pwd) as client:
+        return client.run("/config", "set", "auto_pause", state)
 
 
 def start_monitor_process():
@@ -243,6 +262,8 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('restart_server', restart_server, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('enable_autopause', enable_autopause, filters=filters.Chat(chat_list)))
+    application.add_handler(CommandHandler('disable_autopause', disable_autopause, filters=filters.Chat(chat_list)))
     application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))
     application.add_handler(MessageHandler(filters=filters.Chat(chat_list), callback=forward))
     application.add_handler(MessageHandler(None, callback=restrict))

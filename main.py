@@ -152,7 +152,7 @@ async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
     user_name = user_metadata[0] if user_metadata else update.message.from_user.username
     color = user_metadata[1] if user_metadata else "#FFFFFF"
-    await context.bot.send_messageq(chat_id=update.effective_chat.id,
+    await context.bot.send_message(chat_id=update.effective_chat.id,
                                          text=f"Username is set to '{user_name}'.\n Color is set to '{color}'.")
 
 

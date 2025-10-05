@@ -183,11 +183,11 @@ def send_message_to_tg(message, is_chat=False):
     logging.info(f"Send message to TG: {message}")
     message = format_tg_message(message)
     chats = settings_cur.execute(get_chats).fetchall()
+    bot = Bot(token=bot_token)  # (optional: reuse one Bot per call)
     for chat in chats:
-        bot = Bot(token=bot_token)
         logging.info(f"Sending message to chat: {chat}")
         if is_chat and chat[1] == 0:
-            return
+            continue
         asyncio.run(bot.send_message(chat_id=chat[0], text=message, parse_mode="HTML"))
 
 
@@ -240,13 +240,14 @@ def get_message_type(message):
 def format_tg_message(log_text):
     match = re.search(r"\[CHAT\] (.*?): (.*)", log_text)
     if match:
-        username = match.group(1)  # Extracts 'unknown.device'
-        message = match.group(2)  # Extracts the actual message
-        for code in code_to_emoji.keys():
+        username = match.group(1)
+        message = match.group(2)
+        for code, emoji in code_to_emoji.items():
             if code in message:
-                message = message.replace(code, code_to_emoji[code])
-        logging.info("Username:", username)
-        logging.info("Message:", message)
+                message = message.replace(code, emoji)
+        logging.info(f"Username: {username}")
+        logging.info(f"Message: {message}")
+
         return f"<b>👲[{username}]</b>: {message}"
     return log_text
 

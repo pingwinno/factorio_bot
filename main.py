@@ -219,13 +219,24 @@ async def consume_logs(queue: asyncio.Queue, db: Database, bot):
 # --- Main ---
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Unhandled error: {context.error}", exc_info=context.error)
+
+
 async def main():
     db = Database()
     await db.init()
 
     factorio = FactorioClient(CONTAINER_NAME, RCON_SERVER, RCON_PORT, RCON_PWD)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(15)
+        .read_timeout(30)
+        .write_timeout(30)
+        .build()
+    )
     app.bot_data["db"] = db
     app.bot_data["factorio"] = factorio
 
@@ -243,6 +254,7 @@ async def main():
     app.add_handler(CommandHandler("disable_autopause", cmd_disable_autopause, filters=chat_filter))
     app.add_handler(MessageHandler(chat_filter, forward_to_factorio))
     app.add_handler(MessageHandler(None, restrict))
+    app.add_error_handler(error_handler)
 
     await app.initialize()
     await app.start()

@@ -232,9 +232,9 @@ async def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .connect_timeout(15)
-        .read_timeout(30)
-        .write_timeout(30)
+        .connect_timeout(60)
+        .read_timeout(60)
+        .write_timeout(60)
         .build()
     )
     app.bot_data["db"] = db

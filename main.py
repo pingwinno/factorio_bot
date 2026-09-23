@@ -1,220 +1,61 @@
 import asyncio
 import json
 import logging
-import multiprocessing
 import os
 import re
-import sqlite3
-import time
+import signal
 
-import docker
-from rcon.source import Client
-from telegram import Update, Bot
+from telegram import Update
 from telegram.constants import ChatAction
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-code_to_emoji = {
-    "[entity=tile-ghost]": "👻",  # Ghost (Tile)
-    "[entity=entity-ghost]": "👻",  # Ghost (Entity)
-    "[entity=behemoth-biter]": "🪲",  # Behemoth Biter (Closest match: T-Rex)
-    "[virtual-signal=signal-skull]": "💀",  # Skull
-    "[virtual-signal=signal-ghost]": "👻",  # Ghost
-    "[virtual-signal=signal-check]": "✅",  # Check mark
-    "[virtual-signal=signal-deny]": "❌"  # Cross mark
+from database import Database
+from factorio_client import FactorioClient
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+BOT_TOKEN = os.environ["APIKEY"]
+CONTAINER_NAME = os.environ["CONTAINER_NAME"]
+RCON_SERVER = os.environ["RCON_SERVER"]
+RCON_PORT = int(os.environ["RCON_PORT"])
+RCON_PWD = os.environ["RCON_PWD"]
+CHAT_LIST = json.loads(os.environ["CHAT_LIST"])
+
+CODE_TO_EMOJI = {
+    "[entity=tile-ghost]": "\U0001f47b",
+    "[entity=entity-ghost]": "\U0001f47b",
+    "[entity=behemoth-biter]": "\U0001fab2",
+    "[virtual-signal=signal-skull]": "\U0001f480",
+    "[virtual-signal=signal-ghost]": "\U0001f47b",
+    "[virtual-signal=signal-check]": "\u2705",
+    "[virtual-signal=signal-deny]": "\u274c",
 }
 
-# Load environment variables
-bot_token = os.environ['APIKEY']
-container_name = os.environ['CONTAINER_NAME']
-rcon_server = os.environ['RCON_SERVER']
-rcon_port = int(os.environ['RCON_PORT'])
-rcon_pwd = os.environ['RCON_PWD']
 
-chat_list = json.loads(os.environ['CHAT_LIST'])
-
-# Ensure the database folder exists
-if not os.path.exists("db"):
-    os.mkdir("db")
-client = docker.from_env()
-
-# Setup SQLite database
-settings_con = sqlite3.connect("db/settings.db", check_same_thread=False)
-settings_cur = settings_con.cursor()
-settings_cur.execute("CREATE TABLE IF NOT EXISTS chat_settings(chat_id NUMERIC PRIMARY KEY, messages_enabled BOOLEAN)")
-
-user_con = sqlite3.connect("db/user_settings.db", check_same_thread=False)
-user_cur = user_con.cursor()
-user_cur.execute("CREATE TABLE IF NOT EXISTS user_settings(user_id NUMERIC PRIMARY KEY, username TEXT, color TEXT)")
-# SQL Queries
-add_chat = "INSERT OR REPLACE INTO chat_settings VALUES(?, ?);"
-get_chats = "SELECT * FROM chat_settings;"
-delete_chat = "DELETE FROM chat_settings WHERE chat_id = ?;"
-
-add_user = "INSERT OR REPLACE INTO user_settings VALUES(?, ?, ?);"
-get_user = "SELECT username, color FROM user_settings WHERE user_id = ?;"
-
-# Configure logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-monitor_thread = None
+def format_factorio_message(log_text: str) -> str:
+    match = re.search(r"\[CHAT\] (.*?): (.*)", log_text)
+    if match:
+        username = match.group(1)
+        message = match.group(2)
+        for code, emoji in CODE_TO_EMOJI.items():
+            if code in message:
+                message = message.replace(code, emoji)
+        return f"<b>\U0001f472[{username}]</b>: {message}"
+    return log_text
 
 
-async def restrict(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info(f"User {update.effective_user.id} from chat {update.effective_chat.id} sends {update.message.text}")
-
-
-# === TELEGRAM COMMAND HANDLERS === #
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Received /start command.")
-    chat_id = update.message.chat_id
-    settings_cur.execute(add_chat, [chat_id, False])
-    settings_con.commit()
-    await context.bot.send_message(chat_id=chat_id,
-                                         text="Chat added. Type /enable_messages to receive Factorio messages.")
-
-
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Received /stop command.")
-    chat_id = update.message.chat_id
-    settings_cur.execute(delete_chat, [chat_id])
-    settings_con.commit()
-    await context.bot.send_message(chat_id=chat_id, text="Chat deleted.")
-
-
-async def enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Received /enable_messages command.")
-    chat_id = update.message.chat_id
-    settings_cur.execute(add_chat, [chat_id, True])
-    settings_con.commit()
-    await context.bot.send_message(chat_id=chat_id, text="Messages enabled.")
-
-
-async def disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Received /disable_messages command.")
-    chat_id = update.message.chat_id
-    settings_cur.execute(add_chat, [chat_id, False])
-    settings_con.commit()
-    await context.bot.send_message(chat_id=chat_id, text="Messages disabled.")
-
-async def enable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Autopause enabled.")
-    chat_id = update.message.chat_id
-    logging.info(set_autopause("true"))
-    await context.bot.send_message(chat_id=chat_id, text="Autopause enabled.")
-
-
-async def disable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Autopause disabled.")
-    chat_id = update.message.chat_id
-    logging.info(set_autopause("false"))
-    await context.bot.send_message(chat_id=chat_id, text="Autopause disabled.")
-
-
-async def restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.info("Received /restart_server command.")
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Restarting...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    container = client.containers.get(container_name)
-    try:
-        container.restart()
-        await asyncio.sleep(10)
-    except docker.errors.NotFound as error:
-        logging.error(f"Can't restart server '{error}'.")
-        await context.bot.send_message(chat_id=update.effective_chat.id,
-                                             text=f"Error during server restart: {error}")
-
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f"Server restarted. Status {container.status}")
-    stop_monitor_process()
-    start_monitor_process()
-
-
-async def forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message.text
-    if message:
-        message = f"{get_message_type(update.message)} {message}"
-    else:
-        message = get_message_type(update.message)
-    user_id = update.message.from_user.id
-    user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
-    user_name = user_metadata[0] if user_metadata else update.message.from_user.username
-    color = user_metadata[1] if user_metadata else "#FFFFFF"
-    send_message_to_factorio(f"{user_name}: {message}", color)
-
-
-async def set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    data = update.message.text.split(" ")
-    user_name = data[1]
-    color = data[2]
-    user_cur.execute(add_user, [user_id, user_name, color])
-    user_con.commit()
-    user_metadata = user_cur.execute(get_user, [user_id]).fetchone()
-    user_name = user_metadata[0] if user_metadata else update.message.from_user.username
-    color = user_metadata[1] if user_metadata else "#FFFFFF"
-    await context.bot.send_message(chat_id=update.effective_chat.id,
-                                         text=f"Username is set to '{user_name}'.\n Color is set to '{color}'.")
-
-
-def monitor_logs() -> None:
-    logging.info("Starting log monitoring...")
-    try:
-        container = client.containers.get(container_name)
-
-        logs = container.logs(stream=True, follow=True, since=int(time.time()))
-        for log in logs:
-            line = log.decode("utf-8").strip()
-            logging.info(f"Log line: {line}")
-
-            if "[JOIN]" in line:
-                send_message_to_tg(line.split("[JOIN]")[1].strip())
-            elif "[LEAVE]" in line:
-                send_message_to_tg(line.split("[LEAVE]")[1].strip())
-            elif "[CHAT]" in line and not "<server>" in line:
-                send_message_to_tg(line, True)
-
-    except docker.errors.NotFound:
-        logging.error(f"Container '{container_name}' not found.")
-    except Exception as e:
-        logging.error(f"Error in log monitoring: {e}")
-
-
-def send_message_to_tg(message, is_chat=False):
-    logging.info(f"Send message to TG: {message}")
-    message = format_tg_message(message)
-    chats = settings_cur.execute(get_chats).fetchall()
-    bot = Bot(token=bot_token)  # (optional: reuse one Bot per call)
-    for chat in chats:
-        logging.info(f"Sending message to chat: {chat}")
-        if is_chat and chat[1] == 0:
-            continue
-        asyncio.run(bot.send_message(chat_id=chat[0], text=message, parse_mode="HTML"))
-
-
-def send_message_to_factorio(message, color=None):
-    logging.info(f"Send message to Factorio: {message}")
-
-    with Client(rcon_server, rcon_port, passwd=rcon_pwd) as client:
-        client.run(f"[color={color}]{message}[/color]")
-
-def set_autopause(state):
-    logging.info(f"Set autopause: {state}")
-
-    with Client(rcon_server, rcon_port, passwd=rcon_pwd) as client:
-        return client.run("/config", "set", "auto_pause", state)
-
-
-def start_monitor_process():
-    global monitor_thread
-    monitor_thread = multiprocessing.Process(target=monitor_logs, daemon=True)
-    monitor_thread.start()
-
-
-def stop_monitor_process():
-    monitor_thread.terminate()
-
-
-def get_message_type(message):
+def get_attachment_type(message) -> str:
     if message.photo:
         return "[IMAGE]"
     if message.video:
@@ -232,44 +73,202 @@ def get_message_type(message):
     if message.location:
         return "[LOCATION]"
     if message.poll:
-        return "[POOL]"
+        return "[POLL]"
+    return ""
+
+
+# --- Command Handlers ---
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot_data["db"].add_chat(chat_id, False)
+    await context.bot.send_message(
+        chat_id, "Chat added. Type /enable_messages to receive Factorio messages."
+    )
+
+
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot_data["db"].remove_chat(chat_id)
+    await context.bot.send_message(chat_id, "Chat removed.")
+
+
+async def cmd_enable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot_data["db"].add_chat(chat_id, True)
+    await context.bot.send_message(chat_id, "Messages enabled.")
+
+
+async def cmd_disable_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await context.bot_data["db"].add_chat(chat_id, False)
+    await context.bot.send_message(chat_id, "Messages disabled.")
+
+
+async def cmd_enable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    result = await context.bot_data["factorio"].rcon("/config", "set", "auto_pause", "true")
+    logger.info(f"Autopause enabled: {result}")
+    await context.bot.send_message(chat_id, "Autopause enabled.")
+
+
+async def cmd_disable_autopause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    result = await context.bot_data["factorio"].rcon("/config", "set", "auto_pause", "false")
+    logger.info(f"Autopause disabled: {result}")
+    await context.bot.send_message(chat_id, "Autopause disabled.")
+
+
+async def cmd_restart_server(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    factorio: FactorioClient = context.bot_data["factorio"]
+    await context.bot.send_message(chat_id, "Restarting server...")
+    await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+
+    try:
+        status = await factorio.restart_container()
+    except Exception as e:
+        logger.error(f"Restart failed: {e}", exc_info=True)
+        await context.bot.send_message(chat_id, f"Error during restart: {e}")
+        return
+
+    # Re-attach log monitor to the new container
+    queue: asyncio.Queue = context.bot_data["log_queue"]
+    factorio.start_log_monitor(queue)
+
+    await context.bot.send_message(chat_id, f"Server restarted. Status: {status}")
+
+
+async def cmd_set_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    parts = update.message.text.split(" ", 2)
+    if len(parts) < 3:
+        await context.bot.send_message(
+            update.effective_chat.id,
+            "Usage: /set_user <name> <color>\nExample: /set_user Engineer #FF0000",
+        )
+        return
+    username, color = parts[1], parts[2]
+    await context.bot_data["db"].set_user(user_id, username, color)
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"Username set to '{username}', color to '{color}'.",
+    )
+
+
+async def forward_to_factorio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    factorio: FactorioClient = context.bot_data["factorio"]
+    db: Database = context.bot_data["db"]
+    user_id = update.effective_user.id
+
+    user = await db.get_user(user_id)
+    if user:
+        user_name, color = user
     else:
-        return ""
+        user_name = update.effective_user.username or update.effective_user.first_name
+        color = "#FFFFFF"
+
+    text = update.message.text or ""
+    attachment = get_attachment_type(update.message)
+    message = f"{attachment} {text}".strip() if attachment else text
+
+    if message:
+        await factorio.rcon(f"[color={color}]{user_name}: {message}[/color]")
+        logger.info(f"Forwarded to Factorio: {user_name}: {message}")
 
 
-def format_tg_message(log_text):
-    match = re.search(r"\[CHAT\] (.*?): (.*)", log_text)
-    if match:
-        username = match.group(1)
-        message = match.group(2)
-        for code, emoji in code_to_emoji.items():
-            if code in message:
-                message = message.replace(code, emoji)
-        logging.info(f"Username: {username}")
-        logging.info(f"Message: {message}")
-
-        return f"<b>👲[{username}]</b>: {message}"
-    return log_text
+async def restrict(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(
+        f"Blocked: user={update.effective_user.id} "
+        f"chat={update.effective_chat.id} msg={update.message.text if update.message else None}"
+    )
 
 
-if __name__ == '__main__':
-    logging.info("Starting Telegram bot...")
-    logging.info(f"Allowed chat ids: {chat_list}")
-    print(chat_list)
-    print(type(chat_list[0]))
-    application = ApplicationBuilder().token(bot_token).build()
-    application.add_handler(CommandHandler('start', start, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('set_user', set_user, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('restart_server', restart_server, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('enable_messages', enable_messages, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('disable_messages', disable_messages, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('enable_autopause', enable_autopause, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('disable_autopause', disable_autopause, filters=filters.Chat(chat_list)))
-    application.add_handler(CommandHandler('stop', stop, filters=filters.Chat(chat_list)))
-    application.add_handler(MessageHandler(filters=filters.Chat(chat_list), callback=forward))
-    application.add_handler(MessageHandler(None, callback=restrict))
+# --- Log Monitor Consumer ---
 
-    # Start log monitoring in a separate thread
-    start_monitor_process()
-    # Run bot polling in the main thread
-    application.run_polling()
+
+async def consume_logs(queue: asyncio.Queue, db: Database, bot):
+    while True:
+        line = await queue.get()
+        if "[JOIN]" in line:
+            text = line.split("[JOIN]", 1)[1].strip()
+            formatted = f"\U0001f469\ufe0f <b>JOIN:</b> {text}"
+        elif "[LEAVE]" in line:
+            text = line.split("[LEAVE]", 1)[1].strip()
+            formatted = f"\U0001f449 <b>LEAVE:</b> {text}"
+        elif "[CHAT]" in line and "<server>" not in line:
+            formatted = format_factorio_message(line)
+        else:
+            continue
+
+        try:
+            chats = await db.get_chats()
+            for chat_id, messages_enabled in chats:
+                if not messages_enabled:
+                    continue
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=formatted,
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.error(f"Error sending log to TG: {e}", exc_info=True)
+
+
+# --- Main ---
+
+
+async def main():
+    db = Database()
+    await db.init()
+
+    factorio = FactorioClient(CONTAINER_NAME, RCON_SERVER, RCON_PORT, RCON_PWD)
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.bot_data["db"] = db
+    app.bot_data["factorio"] = factorio
+
+    log_queue: asyncio.Queue = asyncio.Queue()
+    app.bot_data["log_queue"] = log_queue
+
+    chat_filter = filters.Chat(CHAT_LIST)
+    app.add_handler(CommandHandler("start", cmd_start, filters=chat_filter))
+    app.add_handler(CommandHandler("stop", cmd_stop, filters=chat_filter))
+    app.add_handler(CommandHandler("set_user", cmd_set_user, filters=chat_filter))
+    app.add_handler(CommandHandler("restart_server", cmd_restart_server, filters=chat_filter))
+    app.add_handler(CommandHandler("enable_messages", cmd_enable_messages, filters=chat_filter))
+    app.add_handler(CommandHandler("disable_messages", cmd_disable_messages, filters=chat_filter))
+    app.add_handler(CommandHandler("enable_autopause", cmd_enable_autopause, filters=chat_filter))
+    app.add_handler(CommandHandler("disable_autopause", cmd_disable_autopause, filters=chat_filter))
+    app.add_handler(MessageHandler(chat_filter, forward_to_factorio))
+    app.add_handler(MessageHandler(None, restrict))
+
+    await app.initialize()
+    await app.start()
+
+    factorio.start_log_monitor(log_queue)
+    log_task = asyncio.create_task(consume_logs(log_queue, db, app.bot))
+
+    await app.updater.start_polling()
+    logger.info(f"Bot started. Allowed chats: {CHAT_LIST}")
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop_event.set)
+
+    await stop_event.wait()
+    logger.info("Shutting down...")
+
+    log_task.cancel()
+    await factorio.stop_log_monitor()
+    await app.updater.stop()
+    await app.stop()
+    await app.shutdown()
+    await db.close()
+    logger.info("Shutdown complete")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

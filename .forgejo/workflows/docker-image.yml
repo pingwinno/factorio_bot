@@ -1,0 +1,33 @@
+name: Publish Docker Image to Forgejo
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REGISTRY: git.unknown-device.org
+  IMAGE_NAME: shiro/factorio_bot
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    container:
+      image: ghcr.io/catthehacker/ubuntu:act-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Forgejo Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKER_PUBLISH_TOKEN }}
+
+      - name: Build and Push Image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
